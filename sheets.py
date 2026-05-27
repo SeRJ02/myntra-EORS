@@ -14,11 +14,17 @@ SCOPES = [
 ]
 
 DEALS_HEADER = [
-    "scraped_at", "category", "brand", "name",
-    "mrp", "sale_price", "product_url", "image_url",
+    "Title", "Description1", "Description2", "Description",
+    "logo", "Image", "ButtonText", "Link", "CopyLink",
+    "scraped_at", "category",
 ]
 DEALS_CAP = 50
 RUNS_HEADER = ["window_key", "count", "last_run_at"]
+
+MYNTRA_LOGO = "https://asset21.ckassets.com/resources/image/stores/myntra-new-t-1777980142.png"
+MYNTRA_COMMISSION = "Upto 8% profit"
+BUTTON_TEXT = "Convert Link"
+EARNKARO_LINK = "https://earnkaro.com/create-earn-link"
 
 
 def _client() -> gspread.Client:
@@ -47,7 +53,7 @@ def _get_or_create_ws(sheet, title: str, header: list[str]):
     try:
         ws = sheet.worksheet(title)
     except gspread.WorksheetNotFound:
-        ws = sheet.add_worksheet(title=title, rows=100, cols=max(10, len(header)))
+        ws = sheet.add_worksheet(title=title, rows=100, cols=max(15, len(header)))
     _ensure_header(ws, header)
     return ws
 
@@ -72,11 +78,13 @@ def bump_run_count(window_key: str):
     counts = _run_counts(ws)
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     if window_key in counts:
-        # update existing row
         all_rows = ws.get_all_values()
         for i, row in enumerate(all_rows[1:], start=2):
             if row and row[0] == window_key:
-                ws.update(f"A{i}:C{i}", [[window_key, int(counts[window_key]["count"]) + 1, now]])
+                ws.update(
+                    f"A{i}:C{i}",
+                    [[window_key, int(counts[window_key]["count"]) + 1, now]],
+                )
                 return
     ws.append_row([window_key, 1, now], value_input_option="RAW")
 
@@ -84,15 +92,31 @@ def bump_run_count(window_key: str):
 # ---------- deals ----------
 
 def _existing_keys(ws) -> set[tuple]:
-    """(product_url, sale_price) tuples already in deals."""
+    """(CopyLink, Description2) tuples already in deals (= product_url, sale_price)."""
     rows = ws.get_all_records()
     keys = set()
     for r in rows:
-        url = r.get("product_url")
-        price = r.get("sale_price")
+        url = r.get("CopyLink")
+        price = r.get("Description2")
         if url:
             keys.add((url, price))
     return keys
+
+
+def _to_row(deal: dict, scraped_at: str) -> list:
+    return [
+        deal.get("name"),            # Title
+        deal.get("mrp"),             # Description1
+        deal.get("sale_price"),      # Description2
+        MYNTRA_COMMISSION,           # Description
+        MYNTRA_LOGO,                 # logo
+        deal.get("image_url"),       # Image
+        BUTTON_TEXT,                 # ButtonText
+        EARNKARO_LINK,               # Link
+        deal.get("product_url"),     # CopyLink
+        scraped_at,                  # scraped_at (hide in UI)
+        deal.get("category"),        # category (hide in UI)
+    ]
 
 
 def prepend_new_deals(rows: list[dict]):
@@ -109,18 +133,15 @@ def prepend_new_deals(rows: list[dict]):
         if not key[0] or key in existing:
             continue
         existing.add(key)
-        new_values.append([now] + [r.get(c) for c in DEALS_HEADER[1:]])
+        new_values.append(_to_row(r, now))
 
     if not new_values:
         return 0
 
-    # Insert at row 2 (below header). insert_rows inserts BEFORE given index.
     ws.insert_rows(new_values, row=2, value_input_option="RAW")
 
-    # Enforce cap: keep header + DEALS_CAP rows, delete the rest.
-    total_rows = ws.row_count
-    used_rows = len(ws.col_values(1))  # includes header
-    max_allowed = DEALS_CAP + 1  # +1 for header
+    used_rows = len(ws.col_values(1))
+    max_allowed = DEALS_CAP + 1
     if used_rows > max_allowed:
         ws.delete_rows(max_allowed + 1, used_rows)
 
