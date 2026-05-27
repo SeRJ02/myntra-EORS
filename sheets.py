@@ -123,7 +123,7 @@ def prepend_new_deals(rows: list[dict]):
     if not rows:
         return 0
     sheet = open_sheet()
-    ws = _get_or_create_ws(sheet, "deals", DEALS_HEADER)
+    ws = _get_or_create_ws(sheet, "Deals", DEALS_HEADER)
     existing = _existing_keys(ws)
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
