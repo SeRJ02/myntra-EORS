@@ -11,16 +11,16 @@ from sheets import append_deals, read_schedule
 IST = tz.gettz("Asia/Kolkata")
 
 
-def is_active(start_ts: str, end_ts: str, now: datetime) -> bool:
+def is_active(date: str, start_ts: str, end_ts: str, now: datetime) -> bool:
+    """date is YYYY-MM-DD (IST). start_ts/end_ts may be HH:MM or full timestamps."""
     try:
-        start = parser.parse(str(start_ts))
-        end = parser.parse(str(end_ts))
+        day = parser.parse(str(date)).date()
+        start = parser.parse(f"{day} {start_ts}")
+        end = parser.parse(f"{day} {end_ts}")
     except (ValueError, TypeError):
         return False
-    if start.tzinfo is None:
-        start = start.replace(tzinfo=IST)
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=IST)
+    start = start.replace(tzinfo=IST)
+    end = end.replace(tzinfo=IST)
     return start <= now <= end
 
 
@@ -34,7 +34,7 @@ def main():
         url = row.get("url")
         if not url:
             continue
-        if not is_active(row.get("start_ts"), row.get("end_ts"), now):
+        if not is_active(row.get("date"), row.get("start_ts"), row.get("end_ts"), now):
             print(f"[{name}] outside window, skipping")
             continue
         print(f"[{name}] scraping {url}")

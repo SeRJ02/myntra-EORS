@@ -15,11 +15,13 @@ Create a sheet with two tabs:
 
 **`schedule`** (header row exactly as below):
 
-| category_name | url | start_ts | end_ts |
-|---|---|---|---|
-| Men Tshirts | https://www.myntra.com/men-tshirts | 2026-05-30 00:00 | 2026-06-02 23:59 |
+| category_name | url | date | start_ts | end_ts |
+|---|---|---|---|---|
+| Men Tshirts | https://www.myntra.com/men-tshirts | 2026-05-30 | 09:00 | 12:00 |
+| Men Tshirts | https://www.myntra.com/men-tshirts | 2026-05-30 | 18:00 | 21:00 |
+| Women Kurtas | https://www.myntra.com/women-kurtas | 2026-05-31 | 00:00 | 23:59 |
 
-`start_ts` / `end_ts` are IST. ISO format (`YYYY-MM-DD HH:MM`) works best.
+One row per (category, date, time-window). Add multiple rows for the same category to cover multiple days or multiple drops per day. All times are **IST**. `date` is `YYYY-MM-DD`; `start_ts` / `end_ts` are `HH:MM` (24h).
 
 **`deals`** — leave empty, the script writes the header on first run.
 
