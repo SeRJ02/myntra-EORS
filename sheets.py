@@ -17,6 +17,8 @@ DEALS_HEADER = [
     "scraped_at", "category", "brand", "name",
     "mrp", "sale_price", "product_url", "image_url",
 ]
+DEALS_CAP = 50
+RUNS_HEADER = ["window_key", "count", "last_run_at"]
 
 
 def _client() -> gspread.Client:
@@ -31,26 +33,95 @@ def open_sheet():
 
 
 def read_schedule() -> list[dict]:
-    """schedule tab columns: category_name | url | start_ts | end_ts (IST, ISO format)."""
     ws = open_sheet().worksheet("schedule")
-    rows = ws.get_all_records()
-    return rows
+    return ws.get_all_records()
 
 
-def ensure_deals_header(ws):
+def _ensure_header(ws, header: list[str]):
     first_row = ws.row_values(1)
-    if first_row != DEALS_HEADER:
-        ws.update("A1", [DEALS_HEADER])
+    if first_row != header:
+        ws.update("A1", [header])
 
 
-def append_deals(rows: list[dict]):
-    if not rows:
-        return
-    ws = open_sheet().worksheet("deals")
-    ensure_deals_header(ws)
+def _get_or_create_ws(sheet, title: str, header: list[str]):
+    try:
+        ws = sheet.worksheet(title)
+    except gspread.WorksheetNotFound:
+        ws = sheet.add_worksheet(title=title, rows=100, cols=max(10, len(header)))
+    _ensure_header(ws, header)
+    return ws
+
+
+# ---------- runs counter ----------
+
+def _run_counts(ws) -> dict[str, dict]:
+    rows = ws.get_all_records()
+    return {r["window_key"]: r for r in rows if r.get("window_key")}
+
+
+def get_run_count(window_key: str) -> int:
+    sheet = open_sheet()
+    ws = _get_or_create_ws(sheet, "runs", RUNS_HEADER)
+    rec = _run_counts(ws).get(window_key)
+    return int(rec["count"]) if rec else 0
+
+
+def bump_run_count(window_key: str):
+    sheet = open_sheet()
+    ws = _get_or_create_ws(sheet, "runs", RUNS_HEADER)
+    counts = _run_counts(ws)
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    values = [
-        [now] + [r.get(col) for col in DEALS_HEADER[1:]]
-        for r in rows
-    ]
-    ws.append_rows(values, value_input_option="RAW")
+    if window_key in counts:
+        # update existing row
+        all_rows = ws.get_all_values()
+        for i, row in enumerate(all_rows[1:], start=2):
+            if row and row[0] == window_key:
+                ws.update(f"A{i}:C{i}", [[window_key, int(counts[window_key]["count"]) + 1, now]])
+                return
+    ws.append_row([window_key, 1, now], value_input_option="RAW")
+
+
+# ---------- deals ----------
+
+def _existing_keys(ws) -> set[tuple]:
+    """(product_url, sale_price) tuples already in deals."""
+    rows = ws.get_all_records()
+    keys = set()
+    for r in rows:
+        url = r.get("product_url")
+        price = r.get("sale_price")
+        if url:
+            keys.add((url, price))
+    return keys
+
+
+def prepend_new_deals(rows: list[dict]):
+    if not rows:
+        return 0
+    sheet = open_sheet()
+    ws = _get_or_create_ws(sheet, "deals", DEALS_HEADER)
+    existing = _existing_keys(ws)
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+    new_values = []
+    for r in rows:
+        key = (r.get("product_url"), r.get("sale_price"))
+        if not key[0] or key in existing:
+            continue
+        existing.add(key)
+        new_values.append([now] + [r.get(c) for c in DEALS_HEADER[1:]])
+
+    if not new_values:
+        return 0
+
+    # Insert at row 2 (below header). insert_rows inserts BEFORE given index.
+    ws.insert_rows(new_values, row=2, value_input_option="RAW")
+
+    # Enforce cap: keep header + DEALS_CAP rows, delete the rest.
+    total_rows = ws.row_count
+    used_rows = len(ws.col_values(1))  # includes header
+    max_allowed = DEALS_CAP + 1  # +1 for header
+    if used_rows > max_allowed:
+        ws.delete_rows(max_allowed + 1, used_rows)
+
+    return len(new_values)
