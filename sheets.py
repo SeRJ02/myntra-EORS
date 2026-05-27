@@ -103,19 +103,25 @@ def _existing_keys(ws) -> set[tuple]:
     return keys
 
 
+def _rupees(amount) -> str | None:
+    if amount in (None, ""):
+        return None
+    return f"₹{amount}"
+
+
 def _to_row(deal: dict, scraped_at: str) -> list:
     return [
         deal.get("name"),            # Title
-        deal.get("mrp"),             # Description1
-        deal.get("sale_price"),      # Description2
+        _rupees(deal.get("mrp")),    # Description1
+        _rupees(deal.get("sale_price")),  # Description2
         MYNTRA_COMMISSION,           # Description
         MYNTRA_LOGO,                 # logo
         deal.get("image_url"),       # Image
         BUTTON_TEXT,                 # ButtonText
         EARNKARO_LINK,               # Link
         deal.get("product_url"),     # CopyLink
-        scraped_at,                  # scraped_at (hide in UI)
-        deal.get("category"),        # category (hide in UI)
+        scraped_at,                  # scraped_at
+        deal.get("category"),        # category
     ]
 
 
@@ -129,7 +135,7 @@ def prepend_new_deals(rows: list[dict]):
 
     new_values = []
     for r in rows:
-        key = (r.get("product_url"), r.get("sale_price"))
+        key = (r.get("product_url"), _rupees(r.get("sale_price")))
         if not key[0] or key in existing:
             continue
         existing.add(key)
