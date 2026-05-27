@@ -59,19 +59,20 @@ def _extract_products(html: str) -> list[dict]:
 def _normalise(p: dict, category: str) -> dict:
     mrp = p.get("mrp")
     price = p.get("price") or p.get("discountedPrice") or mrp
-    discount_pct = None
-    if mrp and price and mrp > 0:
-        discount_pct = round((1 - price / mrp) * 100, 1)
     landing = p.get("landingPageUrl") or ""
+    image = (
+        p.get("searchImage")
+        or p.get("image")
+        or (p.get("images") or [{}])[0].get("src")
+    )
     return {
         "category": category,
         "brand": p.get("brand"),
         "name": p.get("productName") or p.get("product"),
         "mrp": mrp,
         "sale_price": price,
-        "discount_pct": discount_pct,
-        "rating": p.get("rating"),
         "product_url": f"https://www.myntra.com/{landing}" if landing else None,
+        "image_url": image,
     }
 
 

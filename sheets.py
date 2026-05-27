@@ -15,7 +15,7 @@ SCOPES = [
 
 DEALS_HEADER = [
     "scraped_at", "category", "brand", "name",
-    "mrp", "sale_price", "discount_pct", "rating", "product_url",
+    "mrp", "sale_price", "product_url", "image_url",
 ]
 
 
