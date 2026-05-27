@@ -10,7 +10,33 @@ import requests
 FIRECRAWL_URL = "https://api.firecrawl.dev/v1/scrape"
 TOP_N = 10
 
-MYX_RE = re.compile(r"window\.__myx\s*=\s*(\{.*?\});", re.DOTALL)
+MYX_RE = re.compile(r"window\.__myx\s*=\s*")
+
+
+def _extract_json_object(text: str, start: int) -> str:
+    """Return the JSON object starting at text[start] (which must be '{'), respecting strings."""
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise ValueError("unterminated JSON object")
 
 
 def _api_key() -> str:
@@ -46,7 +72,11 @@ def _extract_products(html: str) -> list[dict]:
     m = MYX_RE.search(html)
     if not m:
         return []
-    state = json.loads(m.group(1))
+    brace_idx = html.find("{", m.end())
+    if brace_idx < 0:
+        return []
+    raw = _extract_json_object(html, brace_idx)
+    state = json.loads(raw)
     search = state.get("searchData") or state.get("search") or {}
     results = (
         search.get("results", {}).get("products")
