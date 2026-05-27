@@ -37,7 +37,12 @@ def fetch_page(slug: str, filters: dict, page: int, rows: int = 100) -> dict:
         headers=HEADERS,
         timeout=30,
     )
-    r.raise_for_status()
+    if r.status_code != 200 or not r.headers.get("content-type", "").startswith("application/json"):
+        snippet = r.text[:200].replace("\n", " ")
+        raise RuntimeError(
+            f"non-JSON response status={r.status_code} "
+            f"ct={r.headers.get('content-type')} body={snippet!r}"
+        )
     return r.json()
 
 
