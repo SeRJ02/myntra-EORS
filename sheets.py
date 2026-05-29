@@ -28,79 +28,9 @@ EARNKARO_LINK = "https://earnkaro.com/create-earn-link"
 
 
 def _client() -> gspread.Client:
-    raw = os.environ["GCP_SA_KEY"]
-    info = json.loads(raw)
+    info = json.loads(os.environ["GCP_SA_KEY"])
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
-
-
-def open_sheet():
-    return _client().open_by_key(os.environ["SHEET_ID"])
-
-
-def read_schedule() -> list[dict]:
-    ws = open_sheet().worksheet("schedule")
-    return ws.get_all_records()
-
-
-def _ensure_header(ws, header: list[str]):
-    first_row = ws.row_values(1)
-    if first_row != header:
-        ws.update("A1", [header])
-
-
-def _get_or_create_ws(sheet, title: str, header: list[str]):
-    try:
-        ws = sheet.worksheet(title)
-    except gspread.WorksheetNotFound:
-        ws = sheet.add_worksheet(title=title, rows=100, cols=max(15, len(header)))
-    _ensure_header(ws, header)
-    return ws
-
-
-# ---------- runs counter ----------
-
-def _run_counts(ws) -> dict[str, dict]:
-    rows = ws.get_all_records()
-    return {r["window_key"]: r for r in rows if r.get("window_key")}
-
-
-def get_run_count(window_key: str) -> int:
-    sheet = open_sheet()
-    ws = _get_or_create_ws(sheet, "runs", RUNS_HEADER)
-    rec = _run_counts(ws).get(window_key)
-    return int(rec["count"]) if rec else 0
-
-
-def bump_run_count(window_key: str):
-    sheet = open_sheet()
-    ws = _get_or_create_ws(sheet, "runs", RUNS_HEADER)
-    counts = _run_counts(ws)
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    if window_key in counts:
-        all_rows = ws.get_all_values()
-        for i, row in enumerate(all_rows[1:], start=2):
-            if row and row[0] == window_key:
-                ws.update(
-                    f"A{i}:C{i}",
-                    [[window_key, int(counts[window_key]["count"]) + 1, now]],
-                )
-                return
-    ws.append_row([window_key, 1, now], value_input_option="RAW")
-
-
-# ---------- deals ----------
-
-def _existing_keys(ws) -> set[tuple]:
-    """(CopyLink, Description2) tuples already in deals (= product_url, sale_price)."""
-    rows = ws.get_all_records()
-    keys = set()
-    for r in rows:
-        url = r.get("CopyLink")
-        price = r.get("Description2")
-        if url:
-            keys.add((url, price))
-    return keys
 
 
 def _rupees(amount) -> str | None:
@@ -111,44 +41,105 @@ def _rupees(amount) -> str | None:
 
 def _to_row(deal: dict, scraped_at: str) -> list:
     return [
-        deal.get("name"),            # Title
-        _rupees(deal.get("mrp")),    # Description1
-        _rupees(deal.get("sale_price")),  # Description2
-        MYNTRA_COMMISSION,           # Description
-        MYNTRA_LOGO,                 # logo
-        deal.get("image_url"),       # Image
-        BUTTON_TEXT,                 # ButtonText
-        EARNKARO_LINK,               # Link
-        deal.get("product_url"),     # CopyLink
-        scraped_at,                  # scraped_at
-        deal.get("category"),        # category
+        deal.get("name"),
+        _rupees(deal.get("mrp")),
+        _rupees(deal.get("sale_price")),
+        MYNTRA_COMMISSION,
+        MYNTRA_LOGO,
+        deal.get("image_url"),
+        BUTTON_TEXT,
+        EARNKARO_LINK,
+        deal.get("product_url"),
+        scraped_at,
+        deal.get("category"),
     ]
 
 
-def prepend_new_deals(rows: list[dict]):
-    if not rows:
-        return 0
-    sheet = open_sheet()
-    ws = _get_or_create_ws(sheet, "Deals", DEALS_HEADER)
-    existing = _existing_keys(ws)
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+class SheetSession:
+    """Open the sheet once, read all tabs upfront, batch writes at the end."""
 
-    new_values = []
-    for r in rows:
-        key = (r.get("product_url"), _rupees(r.get("sale_price")))
-        if not key[0] or key in existing:
-            continue
-        existing.add(key)
-        new_values.append(_to_row(r, now))
+    def __init__(self):
+        self.sheet = _client().open_by_key(os.environ["SHEET_ID"])
+        self._schedule_ws = self.sheet.worksheet("schedule")
+        self._deals_ws = self._ensure_tab("Deals", DEALS_HEADER)
+        self._runs_ws = self._ensure_tab("runs", RUNS_HEADER)
 
-    if not new_values:
-        return 0
+        self.schedule = self._schedule_ws.get_all_records()
 
-    ws.insert_rows(new_values, row=2, value_input_option="RAW")
+        deal_rows = self._deals_ws.get_all_records()
+        self._existing_deal_keys = {
+            (r.get("CopyLink"), r.get("Description2"))
+            for r in deal_rows
+            if r.get("CopyLink")
+        }
+        self._existing_deal_count = len(deal_rows)
 
-    used_rows = len(ws.col_values(1))
-    max_allowed = DEALS_CAP + 1
-    if used_rows > max_allowed:
-        ws.delete_rows(max_allowed + 1, used_rows)
+        run_rows = self._runs_ws.get_all_records()
+        self._run_counts = {
+            r["window_key"]: int(r["count"])
+            for r in run_rows
+            if r.get("window_key")
+        }
+        self._run_row_index = {
+            r["window_key"]: i
+            for i, r in enumerate(run_rows, start=2)
+            if r.get("window_key")
+        }
 
-    return len(new_values)
+        self._new_deals: list[list] = []
+        self._run_updates: dict[str, int] = {}
+
+    def _ensure_tab(self, title: str, header: list[str]):
+        try:
+            ws = self.sheet.worksheet(title)
+        except gspread.WorksheetNotFound:
+            ws = self.sheet.add_worksheet(title=title, rows=100, cols=max(15, len(header)))
+        first_row = ws.row_values(1)
+        if first_row != header:
+            ws.update("A1", [header])
+        return ws
+
+    def run_count(self, window_key: str) -> int:
+        return self._run_counts.get(window_key, 0) + self._run_updates.get(window_key, 0)
+
+    def stage_deals(self, deals: list[dict]) -> int:
+        if not deals:
+            return 0
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        added = 0
+        for d in deals:
+            key = (d.get("product_url"), _rupees(d.get("sale_price")))
+            if not key[0] or key in self._existing_deal_keys:
+                continue
+            self._existing_deal_keys.add(key)
+            self._new_deals.append(_to_row(d, now))
+            added += 1
+        return added
+
+    def stage_run_bump(self, window_key: str):
+        self._run_updates[window_key] = self._run_updates.get(window_key, 0) + 1
+
+    def flush(self):
+        """One batch write for deals + runs."""
+        if self._new_deals:
+            self._deals_ws.insert_rows(self._new_deals, row=2, value_input_option="RAW")
+            used = len(self._deals_ws.col_values(1))
+            max_allowed = DEALS_CAP + 1
+            if used > max_allowed:
+                self._deals_ws.delete_rows(max_allowed + 1, used)
+
+        if self._run_updates:
+            now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            updates = []
+            appends = []
+            for key, delta in self._run_updates.items():
+                new_count = self._run_counts.get(key, 0) + delta
+                if key in self._run_row_index:
+                    i = self._run_row_index[key]
+                    updates.append({"range": f"A{i}:C{i}", "values": [[key, new_count, now]]})
+                else:
+                    appends.append([key, new_count, now])
+            if updates:
+                self._runs_ws.batch_update(updates, value_input_option="RAW")
+            if appends:
+                self._runs_ws.append_rows(appends, value_input_option="RAW")
